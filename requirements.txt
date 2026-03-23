@@ -1,0 +1,5 @@
+# Install with: pip install -r requirements.txt
+requests==2.32.3
+pandas==2.2.2
+streamlit==1.37.1
+python-dotenv==0.21.0

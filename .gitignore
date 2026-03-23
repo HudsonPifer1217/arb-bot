@@ -1,0 +1,7 @@
+.env
+paper_trades.csv
+paper_trades_test.csv
+paper_trades_session1.csv
+__pycache__/
+.vscode/
+*.pyc
