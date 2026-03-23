@@ -5,6 +5,10 @@ Provides get_odds() for h2h/spreads/totals markets and get_props() for player
 prop markets. Both functions return (data, requests_remaining) and handle 401,
 422, 429, and timeout errors without raising exceptions. Also exposes
 american_to_decimal() for converting odds format, shared by engine modules.
+
+Each game dict in the returned list includes a commence_time field (UTC ISO 8601,
+e.g. "2026-03-22T20:00:00Z") that downstream consumers use to filter out games
+that have already started or are too close to tipoff.
 """
 
 import os

@@ -2,6 +2,8 @@
 paper_trades.csv
 paper_trades_test.csv
 paper_trades_session1.csv
+paper_trades_session2.csv
+paper_trades_session3.csv
 __pycache__/
 .vscode/
 *.pyc
