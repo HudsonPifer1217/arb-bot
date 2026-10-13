@@ -54,6 +54,14 @@ FAKE_ARB_2 = {
 }
 
 
+FAILURES = []
+
+
+def _fail(msg):
+    FAILURES.append(msg)
+    print(msg)
+
+
 def run_tests():
     # Clean up any leftover test file from a prior run
     if os.path.exists(TEST_CSV_PATH):
@@ -70,19 +78,19 @@ def run_tests():
         if len(rows) == 2:
             print("PASS  Two rows written to CSV")
         else:
-            print(f"FAIL  Expected 2 rows, got {len(rows)}")
+            _fail(f"FAIL  Expected 2 rows, got {len(rows)}")
 
         # --- Test 2: status defaults to "open" ---
         if rows[0]["status"] == "open" and rows[1]["status"] == "open":
             print("PASS  Default status is 'open'")
         else:
-            print(f"FAIL  Unexpected status values: {rows[0]['status']}, {rows[1]['status']}")
+            _fail(f"FAIL  Unexpected status values: {rows[0]['status']}, {rows[1]['status']}")
 
         # --- Test 3: fields round-trip correctly ---
         if rows[0]["game"] == FAKE_ARB_1["game"] and float(rows[0]["roi_pct"]) == FAKE_ARB_1["roi_pct"]:
             print("PASS  Fields written and read back correctly")
         else:
-            print(f"FAIL  Field mismatch: {rows[0]}")
+            _fail(f"FAIL  Field mismatch: {rows[0]}")
 
         # --- Test 4: print_summary() runs without errors ---
         try:
@@ -91,7 +99,7 @@ def run_tests():
             print("--- end summary ---\n")
             print("PASS  print_summary() completed without errors")
         except Exception as e:
-            print(f"FAIL  print_summary() raised: {e}")
+            _fail(f"FAIL  print_summary() raised: {e}")
 
         # --- Test 5: summary math is correct ---
         expected_total_profit = FAKE_ARB_1["guaranteed_profit"] + FAKE_ARB_2["guaranteed_profit"]
@@ -103,18 +111,27 @@ def run_tests():
         if abs(actual_profits - expected_total_profit) < 0.01:
             print(f"PASS  Total profit correct: ${actual_profits:.2f}")
         else:
-            print(f"FAIL  Expected ${expected_total_profit:.2f}, got ${actual_profits:.2f}")
+            _fail(f"FAIL  Expected ${expected_total_profit:.2f}, got ${actual_profits:.2f}")
 
         if abs(actual_avg_roi - expected_avg_roi) < 0.001:
             print(f"PASS  Average ROI correct: {actual_avg_roi:.4f}%")
         else:
-            print(f"FAIL  Expected avg ROI {expected_avg_roi:.4f}%, got {actual_avg_roi:.4f}%")
+            _fail(f"FAIL  Expected avg ROI {expected_avg_roi:.4f}%, got {actual_avg_roi:.4f}%")
 
     finally:
         # Always clean up the test CSV
         if os.path.exists(TEST_CSV_PATH):
             os.remove(TEST_CSV_PATH)
             print("\nCleanup: test CSV removed.")
+
+    if FAILURES:
+        raise AssertionError(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+
+
+def test_logger():
+    """pytest entry point."""
+    FAILURES.clear()
+    run_tests()
 
 
 if __name__ == "__main__":

@@ -6,11 +6,14 @@ outcomes produce an identical payout, guaranteeing equal profit regardless of
 result. Stakes always sum to exactly the bankroll.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 from scrapers.odds_fetcher import american_to_decimal
 
 
@@ -52,3 +55,58 @@ def calculate_stakes(opportunity: dict, bankroll: float) -> dict:
         "guaranteed_profit": round(guaranteed_profit, 2),
         "roi_pct": round(roi_pct, 4),
     }
+
+
+def calculate_realistic_stakes(arb: dict, account_manager) -> dict | None:
+    """Calculate stakes constrained by real account balances.
+
+    Looks up the current balance at each leg's book, caps each leg at
+    config.MAX_STAKE_PCT of that account's balance, then solves for the largest
+    equal-payout bet that fits within every cap. Works for 2-way and 3-way arbs.
+    If any account has less than $10, returns None.
+
+    Args:
+        arb: Arb opportunity dict containing at minimum:
+            book_a, book_b, odds_a, odds_b, arb_pct (plus book_c, odds_c for 3-way).
+        account_manager: Module (or object) exposing get_balance(bookmaker).
+
+    Returns:
+        A new dict merging all fields from arb with added keys:
+            realistic_stake_a, realistic_stake_b[, realistic_stake_c] (float)
+            realistic_profit (float): Worst-case profit at these rounded stakes.
+            realistic_roi (float): ROI as a percentage of total staked.
+            constrained_by (str): Name of the account that limited the stakes.
+        Returns None if any balance is below $10.
+    """
+    letters = "abc" if arb.get("market_type") == "3-way" else "ab"
+    books = [arb[f"book_{l}"] for l in letters]
+    balances = [account_manager.get_balance(b) for b in books]
+    if any(bal < 10.0 for bal in balances):
+        return None
+
+    decs = [american_to_decimal(arb[f"odds_{l}"]) for l in letters]
+    arb_pct = arb["arb_pct"]
+
+    # Stake per $1 of total bankroll on each leg; scale up to the largest
+    # bankroll whose legs all fit within their caps.
+    units = [(1 / d) / arb_pct for d in decs]
+    max_bankrolls = [bal * config.MAX_STAKE_PCT / u for bal, u in zip(balances, units)]
+    bankroll = min(max_bankrolls)
+    constrained_by = books[max_bankrolls.index(bankroll)]
+
+    stakes = [round(bankroll * u, 2) for u in units]
+    total_staked = round(sum(stakes), 2)
+    # Rounding cents can make the payouts differ slightly; report the worst case.
+    payouts = [round(st * d, 2) for st, d in zip(stakes, decs)]
+    realistic_profit = round(min(payouts) - total_staked, 2)
+    realistic_roi = round((realistic_profit / total_staked) * 100, 4) if total_staked else 0.0
+
+    result = {**arb}
+    for l, st in zip(letters, stakes):
+        result[f"realistic_stake_{l}"] = st
+    result.update({
+        "realistic_profit": realistic_profit,
+        "realistic_roi": realistic_roi,
+        "constrained_by": constrained_by,
+    })
+    return result

@@ -6,6 +6,8 @@ computes gross profit, net profit after slippage, win rate, and daily P&L,
 then prints a formatted ASCII report. A 0.5% slippage factor is applied to
 both legs of each trade to model real-world execution friction.
 
+Timestamps in paper_trades.csv are UTC, so --start/--end are UTC dates.
+
 Usage:
     python backtest/backtest.py --start 2026-01-01 --end 2026-03-31
 
@@ -13,6 +15,8 @@ Arguments:
     --start   Start date inclusive (YYYY-MM-DD)
     --end     End date inclusive (YYYY-MM-DD)
 """
+
+from __future__ import annotations
 
 import argparse
 import csv
@@ -64,18 +68,24 @@ def load_trades(start_dt: datetime, end_dt: datetime) -> list[dict]:
         for row in csv.DictReader(f):
             try:
                 ts = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                continue
+                stake_a = float(row["stake_a"])
+                stake_b = float(row["stake_b"])
+                stake_c = float(row.get("stake_c") or 0)
+                profit = float(row["guaranteed_profit"])
+                roi = float(row["roi_pct"])
+            except (KeyError, ValueError):
+                continue  # unparseable or incomplete row (older rows may have blank stakes)
             if start_dt <= ts <= end_dt:
                 trades.append({
                     "timestamp": ts,
                     "date": ts.date(),
                     "game": row["game"],
                     "sport": row["sport"],
-                    "stake_a": float(row["stake_a"]),
-                    "stake_b": float(row["stake_b"]),
-                    "guaranteed_profit": float(row["guaranteed_profit"]),
-                    "roi_pct": float(row["roi_pct"]),
+                    "stake_a": stake_a,
+                    "stake_b": stake_b,
+                    "stake_c": stake_c,
+                    "guaranteed_profit": profit,
+                    "roi_pct": roi,
                 })
     return trades
 
@@ -93,7 +103,7 @@ def apply_slippage(trade: dict) -> float:
     Returns:
         Net profit in USD after subtracting slippage cost from guaranteed_profit.
     """
-    slippage_cost = (trade["stake_a"] + trade["stake_b"]) * SLIPPAGE_RATE
+    slippage_cost = (trade["stake_a"] + trade["stake_b"] + trade.get("stake_c", 0.0)) * SLIPPAGE_RATE
     return trade["guaranteed_profit"] - slippage_cost
 
 

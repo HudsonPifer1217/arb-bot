@@ -4,22 +4,35 @@ Logs arbitrage opportunities to paper_trades.csv and reports aggregate stats.
 Handles CSV creation and schema migration, deduplicates opportunities within a
 configurable time window (suppressing re-logs unless odds shift significantly),
 and provides get_summary_stats() / print_summary() for cycle reporting.
+
+All timestamps are UTC, matching the timestamps find_arbs() puts on each arb.
 """
+
+from __future__ import annotations
 
 import csv
 import hashlib
 import os
-from datetime import datetime, timedelta
+import sys
+from datetime import datetime, timedelta, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import config
 
 CSV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "paper_trades.csv")
 
 COLUMNS = [
-    "arb_id", "timestamp", "sport", "game", "team_a", "team_b",
-    "book_a", "book_b", "odds_a", "odds_b",
-    "stake_a", "stake_b", "guaranteed_profit", "roi_pct", "arb_pct", "status",
+    "arb_id", "timestamp", "sport", "game", "market", "line", "market_type",
+    "team_a", "team_b",
+    "outcome_a", "outcome_b", "outcome_c",
+    "book_a", "book_b", "book_c",
+    "odds_a", "odds_b", "odds_c",
+    "stake_a", "stake_b", "stake_c",
+    "guaranteed_profit", "roi_pct", "arb_pct", "status",
 ]
 
-DUPLICATE_WINDOW_MINUTES = 15
+DUPLICATE_WINDOW_MINUTES = config.DUPLICATE_WINDOW_MINUTES
 ODDS_CHANGE_THRESHOLD = 0.05  # 5% change in decimal odds on either leg triggers a re-log
 
 
@@ -36,12 +49,12 @@ def _ensure_csv() -> None:
 
     with open(CSV_PATH, newline="") as f:
         reader = csv.DictReader(f)
-        existing_fields = reader.fieldnames or []
-        if "arb_id" in existing_fields:
+        existing_fields = set(reader.fieldnames or [])
+        if existing_fields >= set(COLUMNS):
             return
         rows = list(reader)
 
-    # Migrate: rewrite file with arb_id column
+    # Migrate: rewrite file with updated columns
     with open(CSV_PATH, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=COLUMNS)
         writer.writeheader()
@@ -61,7 +74,12 @@ def _make_arb_id(arb: dict) -> str:
     Returns:
         First 12 hex characters of the MD5 hash of the combined key.
     """
-    key = f"{arb.get('game', '')}{arb.get('book_a', '')}{arb.get('book_b', '')}"
+    line = arb.get("line")
+    line = "" if line in (None, "") else f"{float(line):g}"
+    key = (
+        f"{arb.get('game', '')}{arb.get('market', 'h2h')}{line}"
+        f"{arb.get('book_a', '')}{arb.get('book_b', '')}{arb.get('book_c', '')}"
+    )
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
@@ -129,10 +147,39 @@ def _odds_changed_significantly(new_arb: dict, old_row: dict) -> bool:
         return False
     change_a = abs(new_a - old_a) / old_a if old_a else 0
     change_b = abs(new_b - old_b) / old_b if old_b else 0
-    return change_a > ODDS_CHANGE_THRESHOLD or change_b > ODDS_CHANGE_THRESHOLD
+    if change_a > ODDS_CHANGE_THRESHOLD or change_b > ODDS_CHANGE_THRESHOLD:
+        return True
+    # Check third leg for 3-way arbs
+    try:
+        new_c = _to_decimal(float(new_arb["odds_c"]))
+        old_c_raw = old_row.get("odds_c", "")
+        if old_c_raw:
+            old_c = _to_decimal(float(old_c_raw))
+            change_c = abs(new_c - old_c) / old_c if old_c else 0
+            if change_c > ODDS_CHANGE_THRESHOLD:
+                return True
+    except (KeyError, ValueError, ZeroDivisionError):
+        pass
+    return False
 
 
-def log_opportunity(arb: dict, status: str = "open") -> None:
+def _utc_now() -> datetime:
+    """Current UTC time as a naive datetime, comparable with the CSV timestamps."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def is_recent_duplicate(arb: dict) -> bool:
+    """True if this game + market + line + books was logged within the window
+    and none of its odds moved more than ODDS_CHANGE_THRESHOLD since.
+
+    main.py calls this before simulating, so one opportunity is only bet once.
+    """
+    _ensure_csv()
+    duplicate = _find_recent_duplicate(_make_arb_id(arb), _utc_now())
+    return bool(duplicate) and not _odds_changed_significantly(arb, duplicate)
+
+
+def log_opportunity(arb: dict, status: str = "open") -> bool:
     """Append a single arb opportunity as a new row in paper_trades.csv.
 
     Before writing, checks whether an identical matchup (same game + book_a +
@@ -149,9 +196,12 @@ def log_opportunity(arb: dict, status: str = "open") -> None:
             book_b, odds_a, odds_b, stake_a, stake_b, guaranteed_profit,
             roi_pct, arb_pct.
         status: Lifecycle label for the trade. Defaults to "open".
+
+    Returns:
+        True if the row was written, False if it was skipped as a duplicate.
     """
     _ensure_csv()
-    now = datetime.now()
+    now = _utc_now()
     arb_id = _make_arb_id(arb)
 
     duplicate = _find_recent_duplicate(arb_id, now)
@@ -160,7 +210,7 @@ def log_opportunity(arb: dict, status: str = "open") -> None:
             prior_ts = datetime.strptime(duplicate["timestamp"], "%Y-%m-%d %H:%M:%S")
             mins_ago = int((now - prior_ts).total_seconds() / 60)
             print(f" [SKIP] Duplicate arb, already logged {mins_ago} min(s) ago — {arb.get('game')}")
-            return
+            return False
 
     row = {col: arb.get(col, "") for col in COLUMNS}
     row["arb_id"] = arb_id
@@ -168,6 +218,7 @@ def log_opportunity(arb: dict, status: str = "open") -> None:
     row["status"] = status
     with open(CSV_PATH, "a", newline="") as f:
         csv.DictWriter(f, fieldnames=COLUMNS).writerow(row)
+    return True
 
 
 def get_summary_stats() -> dict | None:
@@ -185,11 +236,18 @@ def get_summary_stats() -> dict | None:
         rows = list(csv.DictReader(f))
     if not rows:
         return None
-    roi_values = [float(r["roi_pct"]) for r in rows]
+    def _fval(r, key):
+        v = r.get(key, "")
+        return float(v) if v and str(v).strip() != "" else None
+
+    roi_values = [_fval(r, "roi_pct") for r in rows]
+    roi_values = [v for v in roi_values if v is not None]
+    profit_values = [_fval(r, "guaranteed_profit") for r in rows]
+    profit_values = [v for v in profit_values if v is not None]
     return {
         "total": len(rows),
-        "total_profit": sum(float(r["guaranteed_profit"]) for r in rows),
-        "avg_roi": sum(roi_values) / len(roi_values),
+        "total_profit": sum(profit_values),
+        "avg_roi": sum(roi_values) / len(roi_values) if roi_values else 0.0,
     }
 
 
@@ -208,11 +266,15 @@ def print_summary() -> None:
         print("No trades logged yet.")
         return
 
+    def _fval(r, key):
+        v = r.get(key, "")
+        return float(v) if v and str(v).strip() != "" else None
+
     total = len(rows)
-    total_profit = sum(float(r["guaranteed_profit"]) for r in rows)
-    roi_values = [float(r["roi_pct"]) for r in rows]
-    best = max(rows, key=lambda r: float(r["roi_pct"]))
-    avg_roi = sum(roi_values) / len(roi_values)
+    total_profit = sum(v for r in rows if (v := _fval(r, "guaranteed_profit")) is not None)
+    roi_values = [v for r in rows if (v := _fval(r, "roi_pct")) is not None]
+    best = max(rows, key=lambda r: _fval(r, "roi_pct") or 0.0)
+    avg_roi = sum(roi_values) / len(roi_values) if roi_values else 0.0
 
     print(f"Total opportunities logged : {total}")
     print(f"Total simulated profit     : ${total_profit:.2f}")

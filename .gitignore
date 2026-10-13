@@ -7,3 +7,14 @@ paper_trades_session3.csv
 __pycache__/
 .vscode/
 *.pyc
+paper_trades*.csv
+.DS_Store
+_backup_*/
+# simulation state (personal, changes every cycle)
+paper_trader/accounts.json
+paper_trader/pending_bets.json
+paper_trader/simulation_trades.csv
+*.tmp
+.claude/
+.pytest_cache/
+*.log

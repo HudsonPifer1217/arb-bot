@@ -8,10 +8,16 @@ correct bookmakers, and computes the expected profit percentage.
 
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.arb_detector import find_arbs
+
+# Games must start in the future or the pre-game filter drops them
+_FUTURE = datetime.now(timezone.utc) + timedelta(days=1)
+GAME_1_START = _FUTURE.strftime("%Y-%m-%dT%H:%M:%SZ")
+GAME_2_START = (_FUTURE + timedelta(hours=2, minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 # ---------------------------------------------------------------------------
 # Sample payload mimicking The Odds API v4 response format.
@@ -32,7 +38,7 @@ SAMPLE_ODDS = [
         "id": "game_001",
         "sport_key": "basketball_nba",
         "sport_title": "NBA",
-        "commence_time": "2026-03-22T20:00:00Z",
+        "commence_time": GAME_1_START,
         "home_team": "Boston Celtics",
         "away_team": "Los Angeles Lakers",
         "bookmakers": [
@@ -68,7 +74,7 @@ SAMPLE_ODDS = [
         "id": "game_002",
         "sport_key": "basketball_nba",
         "sport_title": "NBA",
-        "commence_time": "2026-03-22T22:30:00Z",
+        "commence_time": GAME_2_START,
         "home_team": "Miami Heat",
         "away_team": "Chicago Bulls",
         "bookmakers": [
@@ -103,6 +109,14 @@ SAMPLE_ODDS = [
 ]
 
 
+FAILURES = []
+
+
+def _fail(msg):
+    FAILURES.append(msg)
+    print(msg)
+
+
 def run_tests():
     arbs = find_arbs("basketball_nba", SAMPLE_ODDS)
 
@@ -112,20 +126,20 @@ def run_tests():
     if any(expected_game in g for g in arb_games):
         print(f"PASS  Arb correctly detected: {expected_game}")
     else:
-        print(f"FAIL  Expected arb not found for: {expected_game}")
+        _fail(f"FAIL  Expected arb not found for: {expected_game}")
 
     # --- Test 2: non-arb game was NOT flagged ---
     no_arb_game = "Chicago Bulls @ Miami Heat"
     if not any(no_arb_game in g for g in arb_games):
         print(f"PASS  Non-arb game correctly ignored: {no_arb_game}")
     else:
-        print(f"FAIL  Non-arb game was incorrectly flagged: {no_arb_game}")
+        _fail(f"FAIL  Non-arb game was incorrectly flagged: {no_arb_game}")
 
     # --- Test 3: exactly one opportunity returned ---
     if len(arbs) == 1:
         print(f"PASS  Exactly 1 arb opportunity returned")
     else:
-        print(f"FAIL  Expected 1 opportunity, got {len(arbs)}")
+        _fail(f"FAIL  Expected 1 opportunity, got {len(arbs)}")
 
     # --- Test 4: correct books and profit % ---
     if arbs:
@@ -134,15 +148,24 @@ def run_tests():
         if books == {"DraftKings", "FanDuel"}:
             print(f"PASS  Correct bookmakers identified: {books}")
         else:
-            print(f"FAIL  Unexpected bookmakers: {books}")
+            _fail(f"FAIL  Unexpected bookmakers: {books}")
 
         expected_profit = 20.0
         if abs(opp["profit_pct"] - expected_profit) < 0.01:
             print(f"PASS  Profit % correct: {opp['profit_pct']}%")
         else:
-            print(f"FAIL  Expected profit {expected_profit}%, got {opp['profit_pct']}%")
+            _fail(f"FAIL  Expected profit {expected_profit}%, got {opp['profit_pct']}%")
 
         print(f"\nOpportunity detail: {opp}")
+
+    if FAILURES:
+        raise AssertionError(f"{len(FAILURES)} check(s) failed: {FAILURES}")
+
+
+def test_arb_detector():
+    """pytest entry point."""
+    FAILURES.clear()
+    run_tests()
 
 
 if __name__ == "__main__":
