@@ -139,6 +139,14 @@ def simulate_arb(arb: dict, account_manager) -> dict | None:
             "odds": arb[f"odds_{l}"],
         })
 
+    # Two legs can be at the same book (3-way arbs), so check each book can
+    # cover its combined stake before placing anything.
+    per_book: dict[str, float] = {}
+    for leg in legs:
+        per_book[leg["book"]] = per_book.get(leg["book"], 0.0) + leg["stake"]
+    if any(account_manager.get_balance(b) < total for b, total in per_book.items()):
+        return None
+
     placed = []
     for leg in legs:
         if not account_manager.place_bet(leg["book"], leg["stake"], leg["odds"]):

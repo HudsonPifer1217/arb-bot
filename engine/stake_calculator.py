@@ -60,8 +60,9 @@ def calculate_stakes(opportunity: dict, bankroll: float) -> dict:
 def calculate_realistic_stakes(arb: dict, account_manager) -> dict | None:
     """Calculate stakes constrained by real account balances.
 
-    Looks up the current balance at each leg's book, caps each leg at
-    config.MAX_STAKE_PCT of that account's balance, then solves for the largest
+    Looks up the current balance at each leg's book, caps the total staked at
+    each book at config.MAX_STAKE_PCT of that account's balance (legs at the
+    same book share one cap), then solves for the largest
     equal-payout bet that fits within every cap. Works for 2-way and 3-way arbs.
     If any account has less than $10, returns None.
 
@@ -88,11 +89,17 @@ def calculate_realistic_stakes(arb: dict, account_manager) -> dict | None:
     arb_pct = arb["arb_pct"]
 
     # Stake per $1 of total bankroll on each leg; scale up to the largest
-    # bankroll whose legs all fit within their caps.
+    # bankroll whose legs all fit within their caps. Legs at the same book share
+    # one cap, so their units are combined before applying MAX_STAKE_PCT.
     units = [(1 / d) / arb_pct for d in decs]
-    max_bankrolls = [bal * config.MAX_STAKE_PCT / u for bal, u in zip(balances, units)]
-    bankroll = min(max_bankrolls)
-    constrained_by = books[max_bankrolls.index(bankroll)]
+    book_units: dict[str, float] = {}
+    book_balance: dict[str, float] = {}
+    for b, bal, u in zip(books, balances, units):
+        book_units[b] = book_units.get(b, 0.0) + u
+        book_balance[b] = bal
+    max_bankrolls = {b: book_balance[b] * config.MAX_STAKE_PCT / book_units[b] for b in book_units}
+    constrained_by = min(max_bankrolls, key=max_bankrolls.get)
+    bankroll = max_bankrolls[constrained_by]
 
     stakes = [round(bankroll * u, 2) for u in units]
     total_staked = round(sum(stakes), 2)

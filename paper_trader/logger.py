@@ -176,7 +176,34 @@ def is_recent_duplicate(arb: dict) -> bool:
     """
     _ensure_csv()
     duplicate = _find_recent_duplicate(_make_arb_id(arb), _utc_now())
-    return bool(duplicate) and not _odds_changed_significantly(arb, duplicate)
+    if duplicate and not _odds_changed_significantly(arb, duplicate):
+        return True
+    # A bet that is still open blocks a re-bet regardless of the time window.
+    open_bet = _find_open_bet(arb)
+    return bool(open_bet) and not _odds_changed_significantly(arb, open_bet)
+
+
+def _find_open_bet(arb: dict) -> dict | None:
+    """Return the newest open bet on the same game + market + line + books, as
+    a row-like dict with odds_a/odds_b[/odds_c], or None."""
+    from paper_trader import simulator  # imported here to avoid a circular import
+
+    def _line(v):
+        return "" if v in (None, "") else f"{float(v):g}"
+
+    letters = "abc" if arb.get("market_type") == "3-way" else "ab"
+    books = [arb.get(f"book_{l}", "") for l in letters]
+    match = None
+    for bet in simulator.load_pending():
+        legs = bet.get("legs", [])
+        if (
+            bet.get("game") == arb.get("game")
+            and bet.get("market", "h2h") == arb.get("market", "h2h")
+            and _line(bet.get("line")) == _line(arb.get("line"))
+            and [leg.get("book") for leg in legs] == books
+        ):
+            match = {f"odds_{l}": leg.get("odds") for l, leg in zip(letters, legs)}
+    return match
 
 
 def log_opportunity(arb: dict, status: str = "open") -> bool:

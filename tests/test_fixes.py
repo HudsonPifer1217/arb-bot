@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import config
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.arb_detector import find_arbs
@@ -162,3 +164,50 @@ def test_dedup_window_is_not_shifted_by_local_timezone(isolated_files, monkeypat
     old = {**arb, "timestamp": (datetime.now(timezone.utc) - timedelta(minutes=logger.DUPLICATE_WINDOW_MINUTES + 5)).strftime("%Y-%m-%d %H:%M:%S")}
     logger.log_opportunity(old)
     assert not logger.is_recent_duplicate(arb)
+
+
+# ── Open bets and shared-book caps ───────────────────────────────────────────
+
+def test_open_bet_blocks_rebet_after_window(isolated_files, monkeypatch):
+    game = _game([("DraftKings", _h2h(150, -170)), ("FanDuel", _h2h(-170, 150))])
+    arb = find_arbs("nba", [game])[0]
+    staked = calculate_realistic_stakes(arb, am)
+    assert sim.simulate_arb(staked, am) is not None
+    assert logger.log_opportunity(arb)
+    # The CSV window has expired, but the bet is still open: no re-bet
+    monkeypatch.setattr(logger, "DUPLICATE_WINDOW_MINUTES", 0)
+    assert logger._find_recent_duplicate(logger._make_arb_id(arb), logger._utc_now()) is None
+    assert logger.is_recent_duplicate(arb)
+    # Odds moved more than 5%: a new opportunity even with the bet open
+    assert not logger.is_recent_duplicate({**arb, "odds_a": 190})
+    # Once settled, the window rules alone apply again
+    sim.settle_due_bets(am, now=datetime.now(timezone.utc) + timedelta(days=1))
+    assert not logger.is_recent_duplicate(arb)
+
+
+def test_shared_book_legs_share_one_stake_cap(isolated_files):
+    accounts = am.load_accounts()
+    accounts["BetOnline.ag"]["balance"] = 480.11
+    am.save_accounts(accounts)
+    arb = {"game": "AEK Athens @ Shakhtar Donetsk", "market_type": "3-way", "arb_pct": 0.998889,
+           "book_a": "BetOnline.ag", "book_b": "BetOnline.ag", "book_c": "BetUS",
+           "odds_a": 176, "odds_b": 173, "odds_c": 270,
+           "outcome_a": "AEK Athens", "outcome_b": "Draw", "outcome_c": "Shakhtar Donetsk"}
+    staked = calculate_realistic_stakes(arb, am)
+    combined = staked["realistic_stake_a"] + staked["realistic_stake_b"]
+    assert combined <= 480.11 * config.MAX_STAKE_PCT + 0.02
+    assert staked["constrained_by"] == "BetOnline.ag"
+    assert sim.simulate_arb(staked, am) is not None
+
+
+def test_simulate_rejects_shared_book_overdraw_without_placing(isolated_files):
+    accounts = am.load_accounts()
+    accounts["BetOnline.ag"]["balance"] = 100.0
+    am.save_accounts(accounts)
+    before = {k: v["balance"] for k, v in am.load_accounts().items()}
+    arb = {"book_a": "BetOnline.ag", "book_b": "BetOnline.ag", "book_c": "BetUS",
+           "odds_a": 176, "odds_b": 173, "odds_c": 270, "market_type": "3-way",
+           "realistic_stake_a": 60.0, "realistic_stake_b": 60.0, "realistic_stake_c": 50.0}
+    assert sim.simulate_arb(arb, am) is None
+    after = {k: v["balance"] for k, v in am.load_accounts().items()}
+    assert after == before and am.load_accounts()["BetOnline.ag"]["bet_count"] == 0
