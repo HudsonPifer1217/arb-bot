@@ -223,6 +223,54 @@ def transfer_funds(from_book: str, to_book: str, amount: float) -> None:
         _transfer_funds_unlocked(from_book, to_book, amount)
 
 
+def auto_rebalance(
+    threshold: float | None = None,
+    target: float | None = None,
+    only: list[str] | None = None,
+) -> list[tuple[str, str, float]]:
+    """Top up every account below threshold to target, as you would by moving
+    money between your own books.
+
+    Money comes from the accounts with the most cash, highest first, and a
+    donor is never taken below target. An account that no donor can cover is
+    topped up as far as possible (or skipped). Pass `only` to limit the check
+    to some books, e.g. the legs of an arb about to be placed.
+
+    Returns the transfers made as (from, to, amount).
+    """
+    threshold = config.LOW_BALANCE_THRESHOLD if threshold is None else threshold
+    target = config.AUTO_REBALANCE_TARGET if target is None else target
+    transfers = []
+    with _lock:
+        accounts = load_accounts()
+        wanted = None if only is None else {_resolve_name(b, accounts) for b in only}
+        low = sorted(
+            (a["name"] for a in accounts.values()
+             if a["balance"] < threshold and (wanted is None or a["name"] in wanted)),
+            key=lambda n: accounts[n]["balance"],
+        )
+        for name in low:
+            accounts = load_accounts()
+            needed = round(target - accounts[name]["balance"], 2)
+            donors = sorted(
+                (d["name"] for d in accounts.values() if d["name"] != name and d["balance"] > target),
+                key=lambda n: accounts[n]["balance"],
+                reverse=True,
+            )
+            for donor in donors:
+                if needed <= 0:
+                    break
+                amount = round(min(needed, accounts[donor]["balance"] - target), 2)
+                if amount <= 0:
+                    continue
+                _transfer_funds_unlocked(donor, name, amount)
+                transfers.append((donor, name, amount))
+                needed = round(needed - amount, 2)
+            if not donors:
+                print(f"⚠️  Cannot top up {name}: no account has more than ${target:.2f}.")
+    return transfers
+
+
 def get_account_summary() -> None:
     accounts = load_accounts()
     rows = []

@@ -7,7 +7,13 @@ API_KEY = os.environ.get("API_KEY")
 POLLING_INTERVAL = 300
 # Distributed bankroll settings
 STARTING_BALANCE_PER_ACCOUNT = 1000.00
-LOW_BALANCE_THRESHOLD = 100.00  # flag accounts below this; `transfer` tops them back up to it
+LOW_BALANCE_THRESHOLD = 250.00  # an account below this gets topped up
+# After each cycle, top up every account below LOW_BALANCE_THRESHOLD to
+# AUTO_REBALANCE_TARGET by moving money from the accounts with the most cash
+# (a donor is never taken below AUTO_REBALANCE_TARGET). Set False to only warn;
+# the `transfer` / `rebalance` commands still do it on demand.
+AUTO_REBALANCE = True
+AUTO_REBALANCE_TARGET = 500.00
 MAX_STAKE_PCT = 0.70        # max 70% of account balance per bet
 MAX_REALISTIC_ROI = 0.30    # reject arbs above 30% as likely bad data
 MIN_GAME_START_MINUTES = 0  # include all future games regardless of tipoff time
@@ -15,7 +21,8 @@ MIN_GAME_START_MINUTES = 0  # include all future games regardless of tipoff time
 SETTLE_AFTER_HOURS = 3.5
 
 # NOTE: this is a raw percentage (e.g. 0.2 = 0.2%), NOT multiplied by 100 before comparison
-MIN_PROFIT_THRESHOLD = 0.001  # require at least 0.001% guaranteed profit
+# 0.5% skips razor-thin arbs that a line move or rounding would erase on real books.
+MIN_PROFIT_THRESHOLD = 0.5  # require at least 0.5% guaranteed profit
 
 # The same game + books + line is simulated once; it is only re-simulated if
 # the odds move by more than 5% or this many minutes have passed.

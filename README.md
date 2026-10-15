@@ -55,6 +55,7 @@ Arb Bot is a sports arbitrage scanner. It polls The Odds API, finds games where 
 - **Realistic stakes:** each leg is capped at `MAX_STAKE_PCT` of that account's balance, and the arb is skipped if a leg can't be funded
 - **Bets settle after the game:** open bets are kept in `paper_trader/pending_bets.json` and settle `SETTLE_AFTER_HOURS` after start time, so the money stays tied up meanwhile
 - **No double-counting:** the same game, market, line and books is bet once unless the odds move more than 5% or `DUPLICATE_WINDOW_MINUTES` passes
+- **Automatic rebalancing:** when an account drops below `LOW_BALANCE_THRESHOLD`, money is moved from the accounts with the most cash to bring it back to `AUTO_REBALANCE_TARGET`, the way you'd move money between your own books. Transfers don't count as profit or loss
 - **Sanity filters:** same-book "arbs" and arbs above `MAX_REALISTIC_ROI` are rejected as bad data
 - **Interactive commands** while the bot runs (see below)
 - **Streamlit dashboard** with cumulative profit, the arb table, account balances, bankroll over time and win rate per book
@@ -141,7 +142,7 @@ streamlit run dashboard.py
 
 **6. Run the tests**
 ```bash
-python -m pytest tests
+pytest
 ```
 
 **Backtest logged trades**
@@ -157,10 +158,10 @@ Type these into the terminal while the bot is running:
 
 | Command | What it does |
 |---|---|
-| `transfer` | Run all rebalance transfers automatically |
+| `transfer` | Top up low accounts now (this also happens automatically when `AUTO_REBALANCE` is on) |
 | `balances` | Print the full account balance table |
 | `summary` | Print the session summary |
-| `rebalance` | Run the transfers, asking for confirmation first |
+| `rebalance` | Same as `transfer`, asking for confirmation first |
 | `status` | Show the cycle count, arbs found, profit and API credits remaining |
 | `help` | List the commands |
 
@@ -180,9 +181,11 @@ All tunable parameters live in [config.py](config.py):
 | `ODDS_FORMAT` | `"american"` | Odds format returned by the API |
 | `STARTING_BALANCE_PER_ACCOUNT` | `1000.00` | Starting balance of each simulated account |
 | `MAX_STAKE_PCT` | `0.70` | Max share of an account's balance on one leg |
-| `MIN_PROFIT_THRESHOLD` | `0.001` | Minimum guaranteed profit, in percent (0.001 = 0.001%) |
+| `MIN_PROFIT_THRESHOLD` | `0.5` | Minimum guaranteed profit, in percent (0.5 = 0.5%). Thinner arbs are skipped |
 | `MAX_REALISTIC_ROI` | `0.30` | Arbs above 30% are rejected as bad data |
-| `LOW_BALANCE_THRESHOLD` | `100.00` | Accounts below this are flagged; `transfer` tops them up to it |
+| `LOW_BALANCE_THRESHOLD` | `250.00` | An account below this is topped up |
+| `AUTO_REBALANCE` | `True` | Top up low accounts automatically at the start of each cycle and before placing an arb |
+| `AUTO_REBALANCE_TARGET` | `500.00` | Low accounts are topped up to this; a donor account is never taken below it |
 | `SETTLE_AFTER_HOURS` | `3.5` | Hours after start time that a bet settles |
 | `DUPLICATE_WINDOW_MINUTES` | `720` | How long before the same arb can be bet again |
 | `MAX_LINE_AGE_MINUTES` | `None` | Skip lines older than this (off by default) |

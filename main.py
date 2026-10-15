@@ -49,8 +49,14 @@ _bot_state = {
 # Command implementations
 # ---------------------------------------------------------------------------
 
+def _print_transfers(transfers: list[tuple[str, str, float]]) -> None:
+    for src, dst, amount in transfers:
+        print(f" 🔁 REBALANCE: moved ${amount:.2f} from {src} to {dst}")
+
+
 def _execute_transfers(confirm: bool) -> None:
-    """Move funds from the highest-balance account to every account below threshold."""
+    """Top up every account below LOW_BALANCE_THRESHOLD to AUTO_REBALANCE_TARGET
+    from the accounts with the most cash (see account_manager.auto_rebalance)."""
     accounts = account_manager.load_accounts()
     low = [a for a in accounts.values() if a["balance"] < REBALANCE_THRESHOLD]
 
@@ -72,19 +78,7 @@ def _execute_transfers(confirm: bool) -> None:
             print(" Transfer cancelled.")
             return
 
-    for low_acct in low:
-        accounts = account_manager.load_accounts()
-        name = low_acct["name"]
-        needed = round(REBALANCE_THRESHOLD - accounts[name]["balance"], 2)
-        if needed <= 0:
-            continue
-        high = max(accounts.values(), key=lambda a: a["balance"])
-        surplus = round(high["balance"] - REBALANCE_THRESHOLD, 2)
-        if surplus <= 0:
-            print(f" ⚠️  Cannot top up {name} — no account has sufficient surplus.")
-            continue
-        account_manager.transfer_funds(high["name"], name, round(min(needed, surplus), 2))
-
+    _print_transfers(account_manager.auto_rebalance())
     print(" accounts.json saved.")
 
 
@@ -125,7 +119,7 @@ def _cmd_status() -> None:
 def _cmd_help() -> None:
     print("""
  Available commands:
-   transfer   — execute all rebalance transfers automatically
+   transfer   — top up low accounts now (also automatic when AUTO_REBALANCE is on)
    balances   — print full account balance table
    summary    — print session summary
    rebalance  — execute transfers with confirmation prompt
@@ -200,6 +194,11 @@ def _process_arbs(sport: str, odds_json: list[dict]) -> tuple[list[dict], float]
                 print(f"  [DEBUG] ALREADY BET: {arb['game']} ({arb['market']}) — skipping")
             continue
 
+        if config.AUTO_REBALANCE:
+            # Top up a low book before sizing, as you would before placing the bet
+            letters = "abc" if arb.get("market_type") == "3-way" else "ab"
+            _print_transfers(account_manager.auto_rebalance(only=[arb[f"book_{l}"] for l in letters]))
+
         try:
             result = calculate_realistic_stakes(arb, account_manager)
         except ValueError as e:
@@ -236,7 +235,7 @@ def _process_arbs(sport: str, odds_json: list[dict]) -> tuple[list[dict], float]
 
 
 def _run_cycle() -> None:
-    """Settle finished bets, then fetch odds, detect and place new arbs."""
+    """Settle finished bets, top up low accounts, then fetch odds, detect and place new arbs."""
     for trade in settle_due_bets(account_manager):
         with _state_lock:
             _bot_state["simulated_profit"] += trade["net_profit"]
@@ -246,6 +245,9 @@ def _run_cycle() -> None:
             f"Net P/L: ${trade['net_profit']:+.2f}  |  "
             f"Total bankroll: ${trade['total_bankroll_after']:,.2f}"
         )
+
+    if config.AUTO_REBALANCE:
+        _print_transfers(account_manager.auto_rebalance())
 
     cycle_bets = []
     last_remaining = None

@@ -211,3 +211,71 @@ def test_simulate_rejects_shared_book_overdraw_without_placing(isolated_files):
     assert sim.simulate_arb(arb, am) is None
     after = {k: v["balance"] for k, v in am.load_accounts().items()}
     assert after == before and am.load_accounts()["BetOnline.ag"]["bet_count"] == 0
+
+
+# ── Auto-rebalance and profit threshold ──────────────────────────────────────
+
+def _set_balances(**balances):
+    accounts = am.load_accounts()
+    for name, bal in balances.items():
+        accounts[name.replace("_", " ")]["balance"] = bal
+    am.save_accounts(accounts)
+
+
+def test_auto_rebalance_tops_up_low_account(isolated_files):
+    _set_balances(Hard_Rock_Bet=21.33)
+    total_before = sum(a["balance"] for a in am.load_accounts().values())
+    pl_before = {k: am.net_pl(v) for k, v in am.load_accounts().items()}
+    transfers = am.auto_rebalance(threshold=250, target=500)
+    accounts = am.load_accounts()
+    assert accounts["Hard Rock Bet"]["balance"] == 500.00
+    assert transfers and transfers[0][1] == "Hard Rock Bet"
+    assert sum(t[2] for t in transfers) == pytest.approx(478.67)
+    # Money only moved between accounts; P/L stays neutral
+    assert sum(a["balance"] for a in accounts.values()) == pytest.approx(total_before)
+    assert {k: am.net_pl(v) for k, v in accounts.items()} == pytest.approx(pl_before)
+    assert accounts["Hard Rock Bet"]["total_deposited"] == am.DEFAULT_BALANCE
+
+
+def test_auto_rebalance_never_takes_donor_below_target(isolated_files):
+    accounts = am.load_accounts()
+    for a in accounts.values():
+        a["balance"] = 500.0
+    accounts["DraftKings"]["balance"] = 650.0
+    accounts["BetOnline.ag"]["balance"] = 50.0
+    am.save_accounts(accounts)
+    transfers = am.auto_rebalance(threshold=250, target=500)
+    accounts = am.load_accounts()
+    assert transfers == [("DraftKings", "BetOnline.ag", 150.0)]
+    assert accounts["DraftKings"]["balance"] == 500.0
+    assert accounts["BetOnline.ag"]["balance"] == 200.0
+
+
+def test_auto_rebalance_does_nothing_without_a_donor(isolated_files):
+    accounts = am.load_accounts()
+    for a in accounts.values():
+        a["balance"] = 400.0
+    accounts["BetOnline.ag"]["balance"] = 50.0
+    am.save_accounts(accounts)
+    before = {k: v["balance"] for k, v in am.load_accounts().items()}
+    assert am.auto_rebalance(threshold=250, target=500) == []
+    assert {k: v["balance"] for k, v in am.load_accounts().items()} == before
+
+
+def test_auto_rebalance_only_touches_requested_books(isolated_files):
+    _set_balances(Hard_Rock_Bet=20.0, BetUS=20.0)
+    am.auto_rebalance(threshold=250, target=500, only=["Hard Rock Bet"])
+    accounts = am.load_accounts()
+    assert accounts["Hard Rock Bet"]["balance"] == 500.0
+    assert accounts["BetUS"]["balance"] == 20.0
+
+
+def test_profit_threshold_is_half_a_percent():
+    assert config.MIN_PROFIT_THRESHOLD == 0.5
+    # profit_pct is in percent: a 0.15% arb is filtered, a 1.08% arb is not
+    thin = _game([("DraftKings", _h2h(101, -100)), ("FanDuel", _h2h(-100, 101))])
+    wide = _game([("DraftKings", _h2h(150, -170)), ("FanDuel", _h2h(-170, 150))])
+    thin_arb = find_arbs("nba", [thin])[0]
+    wide_arb = find_arbs("nba", [wide])[0]
+    assert thin_arb["profit_pct"] < config.MIN_PROFIT_THRESHOLD
+    assert wide_arb["profit_pct"] > config.MIN_PROFIT_THRESHOLD
